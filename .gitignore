@@ -1,0 +1,9 @@
+backend/node_modules/
+backend/.env
+firmware/.pio/
+firmware/.vscode/
+firmware/*.bin
+firmware/*.elf
+firmware/*.map
+.DS_Store
+Thumbs.db
