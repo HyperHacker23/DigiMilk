@@ -14,7 +14,7 @@ app.use(bodyParser.json());
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || "YOUR_KEY_ID";
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || "YOUR_KEY_SECRET";
 const ESP32_BASE = process.env.ESP32_BASE || "http://192.168.4.1";
-const DISPENSE_TOKEN = process.env.DISPENSE_TOKEN || "replace_with_shared_token";
+const DISPENSE_TOKEN = process.env.DISPENSE_TOKEN || "DMTKN_4nFh92xQ7sY8wLf0BqZp3cR1vKdTg";
 
 const razorpay = new Razorpay({ key_id: RAZORPAY_KEY_ID, key_secret: RAZORPAY_KEY_SECRET });
 
