@@ -102,12 +102,24 @@ void pumpStart()
 {
   digitalWrite(MOTOR_IN1, HIGH);
   digitalWrite(MOTOR_IN2, LOW);
+
+  Serial.println("PUMP START SIGNAL SENT");
+  Serial.print("IN1 = ");
+  Serial.println(digitalRead(MOTOR_IN1));
+  Serial.print("IN2 = ");
+  Serial.println(digitalRead(MOTOR_IN2));
 }
 
 void pumpStop()
 {
   digitalWrite(MOTOR_IN1, LOW);
   digitalWrite(MOTOR_IN2, LOW);
+
+  Serial.println("PUMP STOP SIGNAL SENT");
+  Serial.print("IN1 = ");
+  Serial.println(digitalRead(MOTOR_IN1));
+  Serial.print("IN2 = ");
+  Serial.println(digitalRead(MOTOR_IN2));
 }
 
 // ------------------- HTTP HANDLERS -------------------
@@ -211,21 +223,54 @@ void handleStop()
 void setup()
 {
   Serial.begin(115200);
-  SPIFFS.begin(true);
+  Serial.println("SETUP STARTED DA");
+
+  if (SPIFFS.begin(true))
+    Serial.println("SPIFFS OK DA");
+  else
+    Serial.println("SPIFFS FAIL DA");
 
   pinMode(FLOW_PIN, INPUT_PULLUP);
   attachInterrupt(FLOW_PIN, flowISR, RISING);
+  Serial.println("FLOW SENSOR ISR ATTACHED DA");
 
   pinMode(MOTOR_IN1, OUTPUT);
   pinMode(MOTOR_IN2, OUTPUT);
   pumpStop();
+  Serial.println("MOTOR PINS SETUP DA");
 
+  // Start AP
   WiFi.softAP(AP_SSID, AP_PASS);
+  Serial.println("AP STARTED DA");
+  Serial.print("AP IP: ");
+  Serial.println(WiFi.softAPIP());
 
+  // Start STA mode
   WiFi.mode(WIFI_AP_STA);
+  Serial.println("TRYING HOME WIFI DA");
+
   WiFi.begin(HOME_SSID, HOME_PASS);
 
+  unsigned long startTrying = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startTrying < 7000)
+  {
+    Serial.print(".");
+    delay(300);
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    Serial.print("STA WIFI CONNECTED DA - IP: ");
+    Serial.println(WiFi.localIP());
+  }
+  else
+  {
+    Serial.println("STA WIFI FAILED DA");
+  }
+
   configTime(19800, 0, "pool.ntp.org");
+  Serial.println("NTP CONFIG SET DA");
 
   server.on("/", handleRoot);
   server.on("/status", handleStatus);
@@ -236,6 +281,7 @@ void setup()
   server.on("/events", handleEvents);
 
   server.begin();
+  Serial.println("WEB SERVER STARTED DA");
 }
 
 // ------------------- LOOP -------------------
