@@ -1,4 +1,3 @@
-<!-- firmware/data/index.html -->
 <!DOCTYPE html>
 <html lang="en">
 
@@ -6,8 +5,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Milk Dispenser</title>
+
   <style>
-    /* (same CSS as previous, mobile-optimized) */
     :root {
       --bg: #f3f7f3;
       --card: #fff;
@@ -28,14 +27,11 @@
       padding: 12px;
     }
 
-    .header {
-      text-align: center;
-      margin-bottom: 6px;
-    }
-
     .title {
       font-size: 20px;
       font-weight: 600;
+      text-align: center;
+      margin-bottom: 6px;
       color: #173b2a;
     }
 
@@ -54,19 +50,13 @@
       border: 1px solid #e6efe6;
       text-align: right;
       background: #fbfffb;
-
-      /* FIXES */
-      box-sizing: border-box;
-      /* prevents overflow */
       margin-bottom: 10px;
-      /* adds spacing from keypad */
+      box-sizing: border-box;
     }
-
 
     .modes {
       display: flex;
       gap: 8px;
-      justify-content: space-between;
       margin-top: 10px;
     }
 
@@ -102,11 +92,7 @@
       border: 1px solid #e6efe6;
       font-size: 20px;
       cursor: pointer;
-    }
-
-    .key:active {
-      transform: translateY(1px);
-      opacity: 0.95;
+      text-align: center;
     }
 
     .actions {
@@ -158,65 +144,26 @@
       color: var(--muted);
       font-size: 13px;
     }
-
-    .small {
-      font-size: 13px;
-      color: var(--muted);
-    }
-
-    #logsModal {
-      position: fixed;
-      left: 0;
-      top: 0;
-      width: 100%;
-      height: 100%;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      background: rgba(0, 0, 0, 0.4);
-    }
-
-    #logsModal .box {
-      width: 92%;
-      max-width: 700px;
-      background: #fff;
-      border-radius: 10px;
-      padding: 12px;
-      max-height: 85vh;
-      overflow: auto;
-    }
-
-    .log-line {
-      font-family: monospace;
-      font-size: 13px;
-      padding: 6px;
-      border-bottom: 1px solid #f1f7f1;
-    }
-
-    .close {
-      background: #eee;
-      border: 0;
-      padding: 8px;
-      border-radius: 8px;
-      cursor: pointer;
-      margin-top: 8px;
-    }
   </style>
+
   <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 </head>
 
 <body>
+
   <div class="container">
-    <div class="header">
-      <div class="title">Milk Dispenser</div>
-    </div>
+    <div class="title">Milk Dispenser</div>
+
     <div class="card">
+
       <input id="display" class="display" readonly placeholder="Enter value">
+
       <div class="modes">
         <button id="bml" class="mode-btn active" onclick="setMode('ml')">mL</button>
         <button id="bl" class="mode-btn" onclick="setMode('litre')">Litre</button>
         <button id="bc" class="mode-btn" onclick="setMode('cost')">Cost</button>
       </div>
+
       <div class="keypad">
         <div class="key" onclick="press('1')">1</div>
         <div class="key" onclick="press('2')">2</div>
@@ -231,148 +178,159 @@
         <div class="key" onclick="press('0')">0</div>
         <div class="key" onclick="preparePayment()">Pay & Dispense</div>
       </div>
+
       <div class="progress-wrap">
         <div class="progress">
-          <div class="bar" id="bar"></div>
+          <div id="bar" class="bar"></div>
         </div>
         <div class="status-row">
           <div id="statLeft">Idle</div>
-          <div id="statRight" class="small">0 / 0 mL</div>
+          <div id="statRight">0 / 0 mL</div>
         </div>
       </div>
+
       <div class="actions">
         <button class="btn" onclick="openLogs()">View Logs</button>
         <button class="btn stop" onclick="clearAllLogs()">Clear Logs</button>
       </div>
-      <div style="height:6px"></div>
-      <div class="small">AP: MilkPoC (password 12345678)</div>
+
+      <div style="margin-top:10px;" class="small">AP: MilkPoC (password 12345678)</div>
     </div>
   </div>
 
-  <div id="logsModal">
+  <div id="logsModal" style="display:none;">
     <div class="box">
       <div style="display:flex;justify-content:space-between;align-items:center;">
-        <h3 style="margin:0">Logs</h3><button class="close" onclick="closeLogs()">Close</button>
+        <h3>Logs</h3>
+        <button class="close" onclick="closeLogs()">Close</button>
       </div>
-      <div id="logContent" style="margin-top:8px"></div>
+      <div id="logContent"></div>
     </div>
   </div>
 
   <script>
-    /* CONFIG - set these before use */
-    const BACKEND_BASE = "http://192.168.1.7:3000"; // e.g. http://192.168.1.50:3000
-    const RAZORPAY_KEY_ID = "rzp_test_Rim994s54pwgE9"; // public key id from Razorpay (test key)
-    const PRICE_PER_LITER = 50.0; // must match ESP32 PRICE_PER_LITER
+
+    const BACKEND_BASE = "http://192.168.1.14:3000";
+    const RAZORPAY_KEY_ID = "rzp_test_Rim994s54pwgE9";
+    const PRICE_PER_LITER = 50.0;
 
     let mode = 'ml';
-    function setMode(m) { mode = m; document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active')); if (m === 'ml') document.getElementById('bml').classList.add('active'); if (m === 'litre') document.getElementById('bl').classList.add('active'); if (m === 'cost') document.getElementById('bc').classList.add('active'); }
-    function press(v) { const d = document.getElementById('display'); d.value = (d.value || '') + v; }
-    function clearDisplay() { document.getElementById('display').value = ''; }
 
-    function computeAmountToCharge(inputValue, mode) {
-      if (mode === 'ml') { let litres = inputValue / 1000.0; return +(litres * PRICE_PER_LITER).toFixed(2); }
-      else if (mode === 'litre') return +(inputValue * PRICE_PER_LITER).toFixed(2);
-      else return +(inputValue).toFixed(2); // cost mode
+    function setMode(m) {
+      mode = m;
+      document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById("b" + (m === "ml" ? "ml" : m === "litre" ? "l" : "c")).classList.add("active");
+    }
+
+    function press(v) {
+      const d = document.getElementById('display');
+      d.value = (d.value || '') + v;
+    }
+
+    function clearDisplay() {
+      document.getElementById('display').value = '';
+    }
+
+    function computeAmountToCharge(v, m) {
+      if (m === 'ml') return +((v / 1000) * PRICE_PER_LITER).toFixed(2);
+      if (m === 'litre') return +(v * PRICE_PER_LITER).toFixed(2);
+      return +v.toFixed(2);
     }
 
     async function preparePayment() {
       const raw = document.getElementById('display').value;
-      if (!raw) return alert('Enter a value');
+      if (!raw) return alert("Enter a value");
+
       const value = parseFloat(raw);
-      if (isNaN(value) || value <= 0) return alert('Invalid value');
+      if (isNaN(value) || value <= 0) return alert("Invalid value");
 
       const amountINR = computeAmountToCharge(value, mode);
-      if (amountINR <= 0) return alert('Computed amount is zero');
 
       try {
-        const res = await fetch(`${BACKEND_BASE}/create_order`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ amount: amountINR, currency: 'INR', client_value: value, client_mode: mode })
+        let res = await fetch(`${BACKEND_BASE}/create_order`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ amount: amountINR, currency: "INR", client_value: value, client_mode: mode })
         });
-        const order = await res.json();
-        if (!order || !order.id) throw new Error('Order creation failed');
+
+        let order = await res.json();
+        if (!order.id) throw new Error("Order creation failed");
 
         const options = {
           key: RAZORPAY_KEY_ID,
           amount: order.amount,
           currency: order.currency,
-          name: 'Milk Dispenser',
-          description: `Pay ₹${amountINR.toFixed(2)} for ${value} ${mode}`,
           order_id: order.id,
-          handler: function (response) {
+          name: "Milk Dispenser",
+
+          handler: function (resp) {
             fetch(`${BACKEND_BASE}/verify_payment`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                razorpay_payment_id: response.razorpay_payment_id,
-                razorpay_order_id: response.razorpay_order_id,
-                razorpay_signature: response.razorpay_signature
-              })
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(resp)
             }).then(r => r.json()).then(j => {
-              if (j && j.success) {
-                alert('Payment verified — dispensing started');
-                document.getElementById('display').value = '';
-                document.getElementById('statLeft').innerText = 'Dispensing...';
-              } else {
-                alert('Payment verification failed: ' + (j && j.error ? j.error : 'unknown'));
-              }
-            }).catch(e => { alert('Verify error'); console.error(e); });
+              if (j.success) {
+                document.getElementById('statLeft').innerText = "Dispensing...";
+                clearDisplay();
+              } else alert("Verification failed");
+            });
           },
-          theme: { color: '#2e9e63' }
+
+          theme: { color: "#2e9e63" }
         };
-        const rzp = new Razorpay(options);
-        rzp.open();
-      } catch (err) {
-        console.error(err);
-        alert('Payment init failed: ' + err.message);
-      }
+
+        new Razorpay(options).open();
+
+      } catch (e) { alert("Payment failed: " + e); }
     }
 
-    // SSE + UI updates
-    let evt = null;
+    function updateStatus(d) {
+      if (!d) return;
+      const ml = d.dispensed_ml || 0;
+      const pct = Math.min((ml / Math.max(d.target_ml, 1)) * 100, 100);
+
+      document.getElementById('bar').style.width = pct + '%';
+      document.getElementById('statLeft').innerText = d.dispensing ? "Dispensing..." : "Idle";
+      document.getElementById('statRight').innerText = `${Math.round(ml)} / ${Math.round(d.target_ml)} mL`;
+    }
+
     function setupSSE() {
-      if (!!window.EventSource) {
-        try {
-          evt = new EventSource('/events');
-          evt.onmessage = function (e) {
-            try {
-              const d = JSON.parse(e.data);
-              if (d.hasOwnProperty('dispensing')) document.getElementById('statLeft').innerText = d.dispensing ? 'Dispensing...' : 'Idle';
-              if (d.hasOwnProperty('dispensed_ml') && d.hasOwnProperty('target_ml')) {
-                const pct = Math.min((d.dispensed_ml / Math.max(d.target_ml, 1)) * 100, 100);
-                document.getElementById('bar').style.width = pct + '%';
-                document.getElementById('statRight').innerText = Math.round(d.dispensed_ml) + ' / ' + Math.round(d.target_ml) + ' mL';
-              }
-            } catch (err) { console.error('SSE parse', err); }
-          };
-          evt.onerror = function (e) { console.log('SSE error', e); evt.close(); setTimeout(setupSSE, 2000); };
-          evt.onopen = function () { console.log('SSE open'); fetchStatusOnce(); };
-        } catch (err) { console.warn('SSE failed', err); setInterval(fetchStatusOnce, 1000); }
-      } else {
-        setInterval(fetchStatusOnce, 800);
+      try {
+        const evt = new EventSource('/events');
+        evt.onmessage = e => updateStatus(JSON.parse(e.data));
+        evt.onerror = () => { evt.close(); setTimeout(setupSSE, 2000); };
+      } catch {
+        setInterval(() => {
+          fetch('/status').then(r => r.json()).then(updateStatus);
+        }, 1000);
       }
     }
 
-    function fetchStatusOnce() {
-      fetch('/status').then(r => r.json()).then(d => {
-        if (d && d.target_ml && d.target_ml > 0) {
-          const pct = Math.min((d.dispensed_ml / Math.max(d.target_ml, 1)) * 100, 100);
-          document.getElementById('bar').style.width = pct + '%';
-          document.getElementById('statRight').innerText = Math.round(d.dispensed_ml) + ' / ' + Math.round(d.target_ml) + ' mL';
-          document.getElementById('statLeft').innerText = d.dispensing ? 'Dispensing...' : 'Idle';
-        } else {
-          document.getElementById('statLeft').innerText = 'Idle';
-          document.getElementById('statRight').innerText = '0 / 0 mL';
-        }
-      }).catch(e => {/* ignore */ });
+    function openLogs() {
+      fetch('/logs').then(r => r.text()).then(txt => {
+        const box = document.getElementById('logContent');
+        box.innerHTML = "";
+        txt.split("\n").forEach(line => {
+          if (!line.trim()) return;
+          const div = document.createElement('div');
+          div.textContent = line;
+          box.appendChild(div);
+        });
+        document.getElementById('logsModal').style.display = "flex";
+      });
     }
 
-    function openLogs() { fetch('/logs').then(r => r.text()).then(t => { const container = document.getElementById('logContent'); container.innerHTML = ''; if (!t || t.trim().length === 0) { container.innerHTML = '<div class="log-line">No logs</div>'; } else { let lines = t.split('\n'); lines.forEach(l => { if (l.trim().length === 0) return; const el = document.createElement('div'); el.className = 'log-line'; el.textContent = l; container.appendChild(el); }); } document.getElementById('logsModal').style.display = 'flex'; }); }
-    function closeLogs() { document.getElementById('logsModal').style.display = 'none'; }
-    function clearAllLogs() { fetch('/clearlogs').then(() => { alert('Logs cleared'); }); }
+    function closeLogs() {
+      document.getElementById('logsModal').style.display = "none";
+    }
 
-    setupSSE(); fetchStatusOnce(); setMode('ml');
+    function clearAllLogs() {
+      fetch('/clearlogs').then(() => alert("Logs cleared"));
+    }
+
+    setupSSE();
+    setMode('ml');
+
   </script>
 </body>
 

@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 #include <time.h>
 
+// ===== CONFIG =====
 const char *AP_SSID = "MilkPoC";
 const char *AP_PASS = "12345678";
 
@@ -14,36 +15,45 @@ const char *HOME_PASS = "f1nallyw1f1c0nnect10n1nmyh0me";
 const char *LOG_PATH = "/logs.csv";
 const float PRICE_PER_LITER = 50.0f;
 
+// THIS MUST MATCH BACKEND
 const char *DISPENSE_API_TOKEN = "DMTKN_4nFh92xQ7sY8wLf0BqZp3cR1vKdTg";
 
-// ------------------- REAL HARDWARE PINS -------------------
-#define FLOW_PIN 27  // YF-S401 Yellow wire
-#define MOTOR_IN1 14 // L298N IN1
-#define MOTOR_IN2 12 // L298N IN2
+// ===== HARDWARE PINS =====
+#define FLOW_PIN 27
+#define MOTOR_IN1 14
+#define MOTOR_IN2 12
 
-// ------------------- FLOW SENSOR VARIABLES -------------------
-volatile uint32_t pulseCount = 0;
-float mlPerPulse = 0.45f; // YF-S401 typical calibration (tune later)
+// ===== GLOBAL STATE =====
+volatile unsigned long pulseCount = 0;
 
-// ------------------- DISPENSING STATE -------------------
+float mlPerPulse = 0.03580f;    // fixed, no calibration
+float calibrationFactor = 0.0f; // derived from mlPerPulse
+
 bool dispensing = false;
 float dispensed_ml = 0.0f;
 float target_ml = 0.0f;
 String current_mode = "ml";
 
-// ------------------- SERVER -------------------
+// Safety/timeouts
+unsigned long dispenseStartMillis = 0;
+unsigned long lastPulseMillis = 0;
+const unsigned long MAX_DISPENSE_MS = 180000UL;
+const unsigned long NO_PULSE_TIMEOUT_MS = 5000UL;
+
+// SSE
 WebServer server(80);
 WiFiClient sseClient;
 bool sseClientActive = false;
 unsigned long lastSSEPing = 0;
 
-// ------------------- ISR -------------------
+// ===== ISR =====
 void IRAM_ATTR flowISR()
 {
   pulseCount++;
+  lastPulseMillis = millis();
 }
 
-// ------------------- LOGGING -------------------
+// ===== LOGGING =====
 String getISTTimestamp()
 {
   time_t now = time(nullptr);
@@ -68,25 +78,21 @@ void appendLog(const String &status, const String &mode, float amount_ml, float 
 {
   ensureLogHeader();
   File f = SPIFFS.open(LOG_PATH, FILE_APPEND);
-  String line = status + "," + mode + "," + String(amount_ml, 2) + "," + String(price, 2) + "," + getISTTimestamp();
-  f.println(line);
+  f.println(status + "," + mode + "," + String(amount_ml, 2) + "," + String(price, 2) + "," + getISTTimestamp());
   f.close();
 }
 
-// ------------------- SSE -------------------
-void sseSend(const String &jsonData)
+// ===== FLOW FORMULA =====
+void computeCalibrationFactor()
 {
-  if (!sseClientActive || !sseClient.connected())
-    return;
-
-  sseClient.print("data: ");
-  sseClient.print(jsonData);
-  sseClient.print("\n\n");
+  float pulsesPerLiter = 1000.0f / mlPerPulse;
+  calibrationFactor = pulsesPerLiter / 60.0f; // pulses per L/min
 }
 
+// ===== SSE JSON =====
 String makeStateJSON()
 {
-  StaticJsonDocument<128> doc;
+  JsonDocument doc;
   doc["dispensing"] = dispensing;
   doc["dispensed_ml"] = dispensed_ml;
   doc["target_ml"] = target_ml;
@@ -97,32 +103,31 @@ String makeStateJSON()
   return out;
 }
 
-// ------------------- MOTOR CONTROL -------------------
+void sseSend(const String &data)
+{
+  if (!sseClientActive || !sseClient.connected())
+    return;
+  sseClient.print("data: ");
+  sseClient.print(data);
+  sseClient.print("\n\n");
+}
+
+// ===== MOTOR =====
 void pumpStart()
 {
   digitalWrite(MOTOR_IN1, HIGH);
   digitalWrite(MOTOR_IN2, LOW);
-
-  Serial.println("PUMP START SIGNAL SENT");
-  Serial.print("IN1 = ");
-  Serial.println(digitalRead(MOTOR_IN1));
-  Serial.print("IN2 = ");
-  Serial.println(digitalRead(MOTOR_IN2));
+  Serial.println("PUMP START");
 }
 
 void pumpStop()
 {
   digitalWrite(MOTOR_IN1, LOW);
   digitalWrite(MOTOR_IN2, LOW);
-
-  Serial.println("PUMP STOP SIGNAL SENT");
-  Serial.print("IN1 = ");
-  Serial.println(digitalRead(MOTOR_IN1));
-  Serial.print("IN2 = ");
-  Serial.println(digitalRead(MOTOR_IN2));
+  Serial.println("PUMP STOP");
 }
 
-// ------------------- HTTP HANDLERS -------------------
+// ===== HTTP HANDLERS =====
 void handleRoot()
 {
   File f = SPIFFS.open("/index.html", FILE_READ);
@@ -166,41 +171,41 @@ void handleEvents()
 
 void handleStart()
 {
-  if (!server.hasArg("value") || !server.hasArg("mode"))
+  // Validate security token (now headers are collected)
+  if (!server.hasHeader("X-DISPENSE-TOKEN") ||
+      server.header("X-DISPENSE-TOKEN") != DISPENSE_API_TOKEN)
   {
-    server.send(400, "text/plain", "Missing value or mode");
+    server.send(403, "text/plain", "Invalid token");
     return;
   }
 
-  if (server.hasHeader("X-DISPENSE-TOKEN"))
+  if (!server.hasArg("value") || !server.hasArg("mode"))
   {
-    if (server.header("X-DISPENSE-TOKEN") != DISPENSE_API_TOKEN)
-    {
-      server.send(403, "text/plain", "Forbidden");
-      return;
-    }
+    server.send(400, "text/plain", "Missing args");
+    return;
   }
 
-  float inputVal = server.arg("value").toFloat();
-  String smode = server.arg("mode");
+  float val = server.arg("value").toFloat();
+  String m = server.arg("mode");
 
-  if (smode == "ml")
-    target_ml = inputVal;
-  else if (smode == "litre")
-    target_ml = inputVal * 1000.0f;
-  else if (smode == "cost")
-    target_ml = (inputVal / PRICE_PER_LITER) * 1000.0f;
-
-  if (target_ml <= 0)
+  if (m == "ml")
+    target_ml = val;
+  else if (m == "litre")
+    target_ml = val * 1000;
+  else if (m == "cost")
+    target_ml = (val / PRICE_PER_LITER) * 1000;
+  else
   {
-    server.send(400, "text/plain", "Invalid target");
+    server.send(400, "text/plain", "Invalid mode");
     return;
   }
 
   pulseCount = 0;
-  dispensed_ml = 0.0f;
-  current_mode = smode;
+  dispensed_ml = 0;
+  current_mode = m;
   dispensing = true;
+  dispenseStartMillis = millis();
+  lastPulseMillis = millis();
 
   pumpStart();
   server.send(200, "text/plain", "Started");
@@ -219,40 +224,31 @@ void handleStop()
   sseSend(makeStateJSON());
 }
 
-// ------------------- SETUP -------------------
+// ===== SETUP =====
 void setup()
 {
   Serial.begin(115200);
-  Serial.println("SETUP STARTED DA");
-
-  if (SPIFFS.begin(true))
-    Serial.println("SPIFFS OK DA");
-  else
-    Serial.println("SPIFFS FAIL DA");
+  SPIFFS.begin(true);
+  ensureLogHeader();
+  computeCalibrationFactor();
 
   pinMode(FLOW_PIN, INPUT_PULLUP);
-  attachInterrupt(FLOW_PIN, flowISR, RISING);
-  Serial.println("FLOW SENSOR ISR ATTACHED DA");
+  attachInterrupt(digitalPinToInterrupt(FLOW_PIN), flowISR, RISING);
 
   pinMode(MOTOR_IN1, OUTPUT);
   pinMode(MOTOR_IN2, OUTPUT);
   pumpStop();
-  Serial.println("MOTOR PINS SETUP DA");
 
-  // Start AP
+  // WiFi
   WiFi.softAP(AP_SSID, AP_PASS);
-  Serial.println("AP STARTED DA");
   Serial.print("AP IP: ");
   Serial.println(WiFi.softAPIP());
 
-  // Start STA mode
   WiFi.mode(WIFI_AP_STA);
-  Serial.println("TRYING HOME WIFI DA");
-
   WiFi.begin(HOME_SSID, HOME_PASS);
 
-  unsigned long startTrying = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - startTrying < 7000)
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 7000)
   {
     Serial.print(".");
     delay(300);
@@ -261,17 +257,13 @@ void setup()
 
   if (WiFi.status() == WL_CONNECTED)
   {
-    Serial.print("STA WIFI CONNECTED DA - IP: ");
+    Serial.print("STA CONNECTED: ");
     Serial.println(WiFi.localIP());
-  }
-  else
-  {
-    Serial.println("STA WIFI FAILED DA");
   }
 
   configTime(19800, 0, "pool.ntp.org");
-  Serial.println("NTP CONFIG SET DA");
 
+  // HTTP routes
   server.on("/", handleRoot);
   server.on("/status", handleStatus);
   server.on("/logs", handleLogsCSV);
@@ -280,38 +272,77 @@ void setup()
   server.on("/stop", handleStop);
   server.on("/events", handleEvents);
 
+  // ⭐ REQUIRED FIX FOR TOKEN CHECK ⭐
+  const char *headerKeys[] = {"X-DISPENSE-TOKEN"};
+  server.collectHeaders(headerKeys, 1);
+
   server.begin();
-  Serial.println("WEB SERVER STARTED DA");
 }
 
-// ------------------- LOOP -------------------
+// ===== LOOP =====
 void loop()
 {
   server.handleClient();
 
   if (dispensing)
   {
-    dispensed_ml = pulseCount * mlPerPulse;
+    static unsigned long lastCalc = 0;
+    static unsigned long lastPulseSnap = 0;
 
-    if (dispensed_ml >= target_ml)
+    if (millis() - lastCalc >= 1000)
     {
-      dispensing = false;
-      pumpStop();
+      // 1 second flow calc
+      detachInterrupt(digitalPinToInterrupt(FLOW_PIN));
 
-      float price = (dispensed_ml / 1000.0f) * PRICE_PER_LITER;
-      appendLog("SUCCESS", current_mode, dispensed_ml, price);
+      unsigned long pulseDelta = pulseCount - lastPulseSnap;
+      lastPulseSnap = pulseCount;
+      lastCalc = millis();
+
+      attachInterrupt(digitalPinToInterrupt(FLOW_PIN), flowISR, RISING);
+
+      // Compute mL from pulses
+      float flowLmin = pulseDelta / calibrationFactor;
+      float mlThisSecond = (flowLmin / 60.0f) * 1000.0f;
+
+      dispensed_ml += mlThisSecond;
+
+      // No flow fail-safe
+      if (pulseDelta == 0 && (millis() - lastPulseMillis > NO_PULSE_TIMEOUT_MS))
+      {
+        dispensing = false;
+        pumpStop();
+        appendLog("FAIL_NO_FLOW", current_mode, dispensed_ml, 0);
+        sseSend(makeStateJSON());
+        return;
+      }
+
+      // Timeout fail-safe
+      if (millis() - dispenseStartMillis > MAX_DISPENSE_MS)
+      {
+        dispensing = false;
+        pumpStop();
+        float price = (dispensed_ml / 1000.0f) * PRICE_PER_LITER;
+        appendLog("FAIL_TIMEOUT", current_mode, dispensed_ml, price);
+        sseSend(makeStateJSON());
+        return;
+      }
+
+      // Target reached
+      if (dispensed_ml >= target_ml)
+      {
+        dispensing = false;
+        pumpStop();
+        float price = (dispensed_ml / 1000.0f) * PRICE_PER_LITER;
+        appendLog("SUCCESS", current_mode, dispensed_ml, price);
+        sseSend(makeStateJSON());
+        return;
+      }
 
       sseSend(makeStateJSON());
-    }
-
-    static unsigned long lastSSE = 0;
-    if (millis() - lastSSE > 200)
-    {
-      sseSend(makeStateJSON());
-      lastSSE = millis();
     }
   }
 
+  // SSE keepalive
   if (sseClientActive && millis() - lastSSEPing > 15000)
   {
     sseClient.print(": ping\n\n");
