@@ -21,8 +21,8 @@ const char *AP_SSID = "MilkPoC";
 const char *AP_PASS = "12345678";
 
 // CHANGE THESE TO YOUR HOME WIFI
-const char *HOME_SSID = "HomeWifi";
-const char *HOME_PASS = "f1nallyw1f1c0nnect10n1nmyh0me";
+const char *HOME_SSID = "work";
+const char *HOME_PASS = "abcdefgh";
 
 const char *LOG_PATH = "/logs.csv";
 const float PRICE_PER_LITER = 50.0f;
@@ -105,7 +105,7 @@ void appendLog(const String &status, const String &mode, double amount_ml, doubl
 // ===== PREFERENCES =====
 void loadCalibrationFromPrefs()
 {
-  prefs.begin(PREF_NAMESPACE, true);
+  prefs.begin(PREF_NAMESPACE, false);
   saved_ms_per_100ml = prefs.getDouble("cal100", saved_ms_per_100ml);
   samplesCSV = prefs.getString("samples", "");
   prefs.end();
@@ -416,7 +416,7 @@ void setup()
   WiFi.begin(HOME_SSID, HOME_PASS);
 
   long t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 8000)
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 30000)
   {
     delay(100);
   }
