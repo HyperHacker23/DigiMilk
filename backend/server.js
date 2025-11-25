@@ -11,85 +11,100 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || "YOUR_KEY_ID";
-const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || "YOUR_KEY_SECRET";
-const ESP32_BASE = process.env.ESP32_BASE || "http://192.168.4.1";
-const DISPENSE_TOKEN = process.env.DISPENSE_TOKEN || "DMTKN_4nFh92xQ7sY8wLf0BqZp3cR1vKdTg";
+// Config
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID;
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
+const ESP32_BASE = process.env.ESP32_BASE;
+const DISPENSE_TOKEN = process.env.DISPENSE_TOKEN;
 
 const razorpay = new Razorpay({ key_id: RAZORPAY_KEY_ID, key_secret: RAZORPAY_KEY_SECRET });
 
-// In-memory order store (demo). For production persist orders.
+// Order Storage
 const orders = new Map();
 
+// 1. Create Order
 app.post('/create_order', async (req, res) => {
     try {
-        const { amount, currency = 'INR', client_value, client_mode } = req.body;
-        if (!amount || !client_value || !client_mode) return res.status(400).json({ error: 'missing fields' });
+        const { amount, client_value, client_mode } = req.body;
 
         const options = {
-            amount: Math.round(amount * 100), // paise
-            currency,
+            amount: Math.round(amount * 100),
+            currency: 'INR',
             receipt: 'rcpt_' + Date.now(),
-            payment_capture: 1,
-            notes: { client_value: String(client_value), client_mode: client_mode }
+            payment_capture: 1
         };
+
         const order = await razorpay.orders.create(options);
-        orders.set(order.id, { amount: amount, client_value: client_value, client_mode: client_mode });
-        res.json(order);
+
+        orders.set(order.id, {
+            amount: amount,
+            client_value: client_value,
+            client_mode: client_mode
+        });
+
+        // [BUG FIX] Memory Leak Prevention
+        setTimeout(() => {
+            if (orders.has(order.id)) orders.delete(order.id);
+        }, 600000); // Delete after 10 mins
+
+        res.json({
+            id: order.id,
+            currency: order.currency,
+            amount: order.amount,
+            key_id: RAZORPAY_KEY_ID
+        });
+
     } catch (err) {
-        console.error('create_order err', err);
+        console.error('Create Order Error:', err);
         res.status(500).json({ error: err.message });
     }
 });
 
+// 2. Verify Payment & Trigger ESP32
 app.post('/verify_payment', async (req, res) => {
     try {
         const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
-        if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature)
-            return res.status(400).json({ error: 'missing fields' });
 
-        // verify signature
         const generated_signature = crypto.createHmac('sha256', RAZORPAY_KEY_SECRET)
             .update(razorpay_order_id + '|' + razorpay_payment_id)
             .digest('hex');
 
         if (generated_signature !== razorpay_signature) {
-            console.warn('Invalid signature', generated_signature, razorpay_signature);
             return res.status(400).json({ success: false, error: 'Invalid signature' });
         }
 
-        // fetch payment and ensure captured
-        const payment = await razorpay.payments.fetch(razorpay_payment_id);
-        if (!payment) return res.status(500).json({ success: false, error: 'Could not fetch payment' });
-        if (payment.status !== 'captured') {
-            return res.status(400).json({ success: false, error: 'Payment not captured', status: payment.status });
-        }
-
         const info = orders.get(razorpay_order_id);
-        if (!info) {
-            console.warn('Order mapping not found for', razorpay_order_id);
-            return res.status(400).json({ success: false, error: 'Order not found' });
-        }
+        if (!info) return res.status(400).json({ success: false, error: 'Order expired or not found' });
 
-        // trigger ESP32 (include token)
-        const value = info.client_value;
-        const mode = info.client_mode;
-        const espUrl = `${ESP32_BASE}/start?value=${encodeURIComponent(value)}&mode=${encodeURIComponent(mode)}`;
+        console.log(`Verified! Dispensing: ${info.client_value} ${info.client_mode}`);
+
+        // Trigger ESP32
+        const params = new URLSearchParams();
+        params.append('value', info.client_value);
+        params.append('mode', info.client_mode);
 
         try {
-            await axios.get(espUrl, { timeout: 5000, headers: { 'X-DISPENSE-TOKEN': DISPENSE_TOKEN } });
+            await axios.post(`${ESP32_BASE}/start`, params, {
+                headers: {
+                    'X-DISPENSE-TOKEN': DISPENSE_TOKEN,
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                timeout: 5000
+            });
+
+            orders.delete(razorpay_order_id);
+            return res.json({ success: true, message: "Dispensing Started" });
+
         } catch (e) {
-            console.warn('Calling ESP32 failed', e.message);
-            return res.json({ success: false, error: 'Payment verified but failed to reach dispenser: ' + e.message });
+            console.error('ESP32 Offline:', e.message);
+            return res.json({ success: false, error: 'Payment received, but dispenser did not respond.' });
         }
 
-        orders.delete(razorpay_order_id);
-        return res.json({ success: true });
     } catch (err) {
-        console.error('verify_payment err', err);
+        console.error('Verify Error:', err);
         res.status(500).json({ error: err.message });
     }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log('Razorpay backend running on', PORT));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

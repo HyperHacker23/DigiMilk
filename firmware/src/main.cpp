@@ -1,59 +1,73 @@
+/**
+ * Project: ESP32 IoT Milk Dispenser (Final)
+ * Hardware: ESP32, L298N Driver (Channel B), Pump
+ * Wiring:
+ * - ENB -> GPIO 27 (Speed/Enable)
+ * - IN3 -> GPIO 26
+ * - IN4 -> GPIO 25
+ */
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
 #include <SPIFFS.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 #include <time.h>
+#include <L298N.h>
 
 // ===== CONFIG =====
 const char *AP_SSID = "MilkPoC";
 const char *AP_PASS = "12345678";
 
+// CHANGE THESE TO YOUR HOME WIFI
 const char *HOME_SSID = "HomeWifi";
 const char *HOME_PASS = "f1nallyw1f1c0nnect10n1nmyh0me";
 
 const char *LOG_PATH = "/logs.csv";
 const float PRICE_PER_LITER = 50.0f;
-
-// THIS MUST MATCH BACKEND
 const char *DISPENSE_API_TOKEN = "DMTKN_4nFh92xQ7sY8wLf0BqZp3cR1vKdTg";
 
-// ===== HARDWARE PINS =====
-#define FLOW_PIN 27
-#define MOTOR_IN1 14
-#define MOTOR_IN2 12
+// ===== HARDWARE (Channel B) =====
+#define ENB_PIN 27
+#define IN3_PIN 26
+#define IN4_PIN 25
 
-// ===== GLOBAL STATE =====
-volatile unsigned long pulseCount = 0;
+// Constructor: (EnablePin, Input1, Input2)
+L298N motor(ENB_PIN, IN3_PIN, IN4_PIN);
 
-float mlPerPulse = 0.03580f;    // fixed, no calibration
-float calibrationFactor = 0.0f; // derived from mlPerPulse
-
-bool dispensing = false;
-float dispensed_ml = 0.0f;
-float target_ml = 0.0f;
-String current_mode = "ml";
-
-// Safety/timeouts
-unsigned long dispenseStartMillis = 0;
-unsigned long lastPulseMillis = 0;
-const unsigned long MAX_DISPENSE_MS = 180000UL;
-const unsigned long NO_PULSE_TIMEOUT_MS = 5000UL;
-
-// SSE
+// ===== STATE =====
 WebServer server(80);
+Preferences prefs;
+const char *PREF_NAMESPACE = "milk";
+
+// Calibration default (approx 6.5s for 100mL)
+double saved_ms_per_100ml = 6503.80;
+
+// Storage for calibration samples
+String samplesCSV = "";
+#define MAX_SAMPLES 20
+unsigned long samples[MAX_SAMPLES];
+int sampleCount = 0;
+
+// Flags
+bool calibrating = false;
+unsigned long calStartMillis = 0;
+bool dispensing = false;
+double target_ml = 0.0;
+String current_mode = "ml";
+unsigned long dispenseStartMillis = 0;
+unsigned long dispenseEndMillis = 0;
+
+// Safety Limits
+const unsigned long MAX_DISPENSE_MS = 300000; // 5 mins
+const unsigned long CAL_MAX_MS = 600000;      // 10 mins
+
+// SSE Client
 WiFiClient sseClient;
 bool sseClientActive = false;
-unsigned long lastSSEPing = 0;
 
-// ===== ISR =====
-void IRAM_ATTR flowISR()
-{
-  pulseCount++;
-  lastPulseMillis = millis();
-}
-
-// ===== LOGGING =====
+// ================= HELPERS =================
 String getISTTimestamp()
 {
   time_t now = time(nullptr);
@@ -69,34 +83,130 @@ void ensureLogHeader()
   if (!SPIFFS.exists(LOG_PATH))
   {
     File f = SPIFFS.open(LOG_PATH, FILE_WRITE);
-    f.println("Status,Mode,Amount_mL,Price,Timestamp");
+    if (f)
+    {
+      f.println("Status,Mode,Amount_mL,Price,Timestamp");
+      f.close();
+    }
+  }
+}
+
+void appendLog(const String &status, const String &mode, double amount_ml, double price)
+{
+  ensureLogHeader();
+  File f = SPIFFS.open(LOG_PATH, FILE_APPEND);
+  if (f)
+  {
+    f.println(status + "," + mode + "," + String(amount_ml, 2) + "," + String(price, 2) + "," + getISTTimestamp());
     f.close();
   }
 }
 
-void appendLog(const String &status, const String &mode, float amount_ml, float price)
+// ===== PREFERENCES =====
+void loadCalibrationFromPrefs()
 {
-  ensureLogHeader();
-  File f = SPIFFS.open(LOG_PATH, FILE_APPEND);
-  f.println(status + "," + mode + "," + String(amount_ml, 2) + "," + String(price, 2) + "," + getISTTimestamp());
-  f.close();
+  prefs.begin(PREF_NAMESPACE, true);
+  saved_ms_per_100ml = prefs.getDouble("cal100", saved_ms_per_100ml);
+  samplesCSV = prefs.getString("samples", "");
+  prefs.end();
+
+  // Parse CSV
+  sampleCount = 0;
+  if (samplesCSV.length())
+  {
+    int idx = 0;
+    String cur = "";
+    while (idx < (int)samplesCSV.length())
+    {
+      char c = samplesCSV[idx++];
+      if (c == ',')
+      {
+        if (cur.length() && sampleCount < MAX_SAMPLES)
+        {
+          samples[sampleCount++] = (unsigned long)cur.toInt();
+          cur = "";
+        }
+      }
+      else
+        cur += c;
+    }
+    if (cur.length() && sampleCount < MAX_SAMPLES)
+      samples[sampleCount++] = (unsigned long)cur.toInt();
+  }
 }
 
-// ===== FLOW FORMULA =====
-void computeCalibrationFactor()
+void saveSamplesCSVToPrefs()
 {
-  float pulsesPerLiter = 1000.0f / mlPerPulse;
-  calibrationFactor = pulsesPerLiter / 60.0f; // pulses per L/min
+  prefs.begin(PREF_NAMESPACE, false);
+  prefs.putString("samples", samplesCSV);
+  prefs.end();
 }
 
-// ===== SSE JSON =====
+void appendSample(unsigned long ms)
+{
+  if (sampleCount < MAX_SAMPLES)
+  {
+    samples[sampleCount++] = ms;
+    if (samplesCSV.length())
+      samplesCSV += ",";
+    samplesCSV += String(ms);
+  }
+  else
+  {
+    // FIFO Rotate
+    for (int i = 1; i < MAX_SAMPLES; ++i)
+      samples[i - 1] = samples[i];
+    samples[MAX_SAMPLES - 1] = ms;
+    // Rebuild CSV
+    samplesCSV = "";
+    for (int i = 0; i < MAX_SAMPLES; ++i)
+    {
+      if (i)
+        samplesCSV += ",";
+      samplesCSV += String(samples[i]);
+    }
+  }
+  saveSamplesCSVToPrefs();
+}
+
+double computeSamplesAverage()
+{
+  if (sampleCount == 0)
+    return 0.0;
+  unsigned long sum = 0;
+  for (int i = 0; i < sampleCount; ++i)
+    sum += samples[i];
+  return ((double)sum) / (double)sampleCount;
+}
+
+// ===== JSON & SSE =====
 String makeStateJSON()
 {
-  JsonDocument doc;
+  StaticJsonDocument<1024> doc;
   doc["dispensing"] = dispensing;
-  doc["dispensed_ml"] = dispensed_ml;
+  doc["calibrating"] = calibrating;
+  doc["saved_ms_per_100ml"] = saved_ms_per_100ml;
   doc["target_ml"] = target_ml;
   doc["mode"] = current_mode;
+  doc["now_ms"] = millis();
+
+  // [BUG FIX] Division by Zero Check
+  double safe_cal = (saved_ms_per_100ml > 0.1) ? saved_ms_per_100ml : 6000.0;
+
+  if (dispensing)
+  {
+    unsigned long elapsed = millis() - dispenseStartMillis;
+    double current_ml = ((double)elapsed / safe_cal) * 100.0;
+    doc["dispensed_ml"] = current_ml;
+  }
+  else
+  {
+    doc["dispensed_ml"] = 0.0;
+  }
+
+  JsonArray arr = doc.createNestedArray("samples");
+  for (int i = 0; i < sampleCount; ++i)
+    arr.add(samples[i]);
 
   String out;
   serializeJson(doc, out);
@@ -105,177 +215,229 @@ String makeStateJSON()
 
 void sseSend(const String &data)
 {
-  if (!sseClientActive || !sseClient.connected())
-    return;
-  sseClient.print("data: ");
-  sseClient.print(data);
-  sseClient.print("\n\n");
+  if (sseClientActive && sseClient.connected())
+  {
+    sseClient.print("data: ");
+    sseClient.print(data);
+    sseClient.print("\n\n");
+  }
+  else
+  {
+    sseClientActive = false;
+  }
 }
 
-// ===== MOTOR =====
-void pumpStart()
+// ===== HANDLERS =====
+void handleDispenseStart()
 {
-  digitalWrite(MOTOR_IN1, HIGH);
-  digitalWrite(MOTOR_IN2, LOW);
-  Serial.println("PUMP START");
-}
-
-void pumpStop()
-{
-  digitalWrite(MOTOR_IN1, LOW);
-  digitalWrite(MOTOR_IN2, LOW);
-  Serial.println("PUMP STOP");
-}
-
-// ===== HTTP HANDLERS =====
-void handleRoot()
-{
-  File f = SPIFFS.open("/index.html", FILE_READ);
-  server.streamFile(f, "text/html");
-  f.close();
-}
-
-void handleStatus()
-{
-  server.send(200, "application/json", makeStateJSON());
-}
-
-void handleLogsCSV()
-{
-  File f = SPIFFS.open(LOG_PATH, FILE_READ);
-  server.streamFile(f, "text/csv");
-  f.close();
-}
-
-void handleClearLogs()
-{
-  SPIFFS.remove(LOG_PATH);
-  ensureLogHeader();
-  server.send(200, "text/plain", "Logs cleared");
-}
-
-void handleEvents()
-{
-  WiFiClient client = server.client();
-  client.println("HTTP/1.1 200 OK");
-  client.println("Content-Type: text/event-stream");
-  client.println("Cache-Control: no-cache");
-  client.println("Connection: keep-alive");
-  client.println();
-  client.println(": connected");
-
-  sseClient = client;
-  sseClientActive = true;
-  sseSend(makeStateJSON());
-}
-
-void handleStart()
-{
-  // Validate security token (now headers are collected)
-  if (!server.hasHeader("X-DISPENSE-TOKEN") ||
-      server.header("X-DISPENSE-TOKEN") != DISPENSE_API_TOKEN)
+  // 1. Security Check
+  if (!server.hasHeader("X-DISPENSE-TOKEN") || server.header("X-DISPENSE-TOKEN") != DISPENSE_API_TOKEN)
   {
     server.send(403, "text/plain", "Invalid token");
     return;
   }
 
-  if (!server.hasArg("value") || !server.hasArg("mode"))
+  // [BUG FIX] Busy Check (Prevents double dispense)
+  if (dispensing || calibrating)
   {
-    server.send(400, "text/plain", "Missing args");
+    server.send(409, "text/plain", "Busy: Already dispensing");
     return;
   }
 
   float val = server.arg("value").toFloat();
-  String m = server.arg("mode");
+  String mode = server.arg("mode");
 
-  if (m == "ml")
+  if (val <= 0)
+  {
+    server.send(400, "text/plain", "Invalid value");
+    return;
+  }
+
+  // 2. Logic
+  if (mode == "ml")
     target_ml = val;
-  else if (m == "litre")
-    target_ml = val * 1000;
-  else if (m == "cost")
-    target_ml = (val / PRICE_PER_LITER) * 1000;
+  else if (mode == "litre")
+    target_ml = val * 1000.0;
+  else if (mode == "cost")
+    target_ml = (val / PRICE_PER_LITER) * 1000.0;
   else
   {
     server.send(400, "text/plain", "Invalid mode");
     return;
   }
 
-  pulseCount = 0;
-  dispensed_ml = 0;
-  current_mode = m;
+  unsigned long runMs = (unsigned long)round((target_ml / 100.0) * saved_ms_per_100ml);
+  if (runMs == 0)
+    runMs = 1;
+
+  if (runMs > MAX_DISPENSE_MS)
+  {
+    server.send(400, "text/plain", "Requested dispense too long");
+    return;
+  }
+
+  // 3. Action
   dispensing = true;
   dispenseStartMillis = millis();
-  lastPulseMillis = millis();
+  dispenseEndMillis = dispenseStartMillis + runMs;
+  current_mode = mode;
+  motor.forward();
 
-  pumpStart();
-  server.send(200, "text/plain", "Started");
+  server.send(200, "text/plain", "Dispense started");
+  appendLog("DISPENSE_START", current_mode, target_ml, (target_ml / 1000.0) * PRICE_PER_LITER);
   sseSend(makeStateJSON());
 }
 
-void handleStop()
+void handleDispenseStop()
 {
+  if (!dispensing)
+  {
+    server.send(200, "text/plain", "Not dispensing");
+    return;
+  }
+  motor.stop();
   dispensing = false;
-  pumpStop();
+  unsigned long actualRunMs = millis() - dispenseStartMillis;
+  double dispensed_ml = ((double)actualRunMs / saved_ms_per_100ml) * 100.0;
+  double price = (dispensed_ml / 1000.0) * PRICE_PER_LITER;
 
-  float price = (dispensed_ml / 1000.0f) * PRICE_PER_LITER;
-  appendLog("SUCCESS", current_mode, dispensed_ml, price);
-
-  server.send(200, "text/plain", "Stopped");
+  appendLog("MANUAL_STOP", current_mode, dispensed_ml, price);
+  server.send(200, "text/plain", "Dispense stopped");
   sseSend(makeStateJSON());
+}
+
+// Calibration Handlers
+void handleCalStart()
+{
+  if (calibrating || dispensing)
+  {
+    server.send(400, "text/plain", "Busy");
+    return;
+  }
+  calibrating = true;
+  calStartMillis = millis();
+  motor.forward();
+  server.send(200, "text/plain", "Cal start");
+  sseSend(makeStateJSON());
+}
+
+void handleCalStop()
+{
+  if (!calibrating)
+    return;
+  motor.stop();
+  calibrating = false;
+  unsigned long delta = millis() - calStartMillis;
+  if (delta > CAL_MAX_MS)
+  {
+    server.send(400, "text/plain", "Timeout");
+    return;
+  }
+
+  appendSample(delta);
+  StaticJsonDocument<256> doc;
+  doc["last_sample_ms"] = delta;
+  doc["average_ms"] = computeSamplesAverage();
+  String out;
+  serializeJson(doc, out);
+  server.send(200, "application/json", out);
+  sseSend(makeStateJSON());
+}
+
+void handleCalSave()
+{
+  if (sampleCount == 0)
+  {
+    server.send(400, "text/plain", "No samples");
+    return;
+  }
+  double avg = computeSamplesAverage();
+  prefs.begin(PREF_NAMESPACE, false);
+  prefs.putDouble("cal100", avg);
+  prefs.end();
+  saved_ms_per_100ml = avg;
+  server.send(200, "application/json", "{\"status\":\"saved\"}");
+  sseSend(makeStateJSON());
+}
+
+void handleCalReset()
+{
+  sampleCount = 0;
+  samplesCSV = "";
+  saveSamplesCSVToPrefs();
+  server.send(200, "text/plain", "Reset OK");
+  sseSend(makeStateJSON());
+}
+
+void handleRoot()
+{
+  if (SPIFFS.exists("/index.html"))
+  {
+    File f = SPIFFS.open("/index.html", "r");
+    server.streamFile(f, "text/html");
+    f.close();
+  }
+  else
+    server.send(200, "text/plain", "Missing index.html");
+}
+
+void handleEvents()
+{
+  WiFiClient client = server.client();
+  if (client)
+  {
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: text/event-stream");
+    client.println("Cache-Control: no-cache");
+    client.println("Connection: keep-alive");
+    client.println();
+    sseClient = client;
+    sseClientActive = true;
+    sseSend(makeStateJSON());
+  }
 }
 
 // ===== SETUP =====
 void setup()
 {
   Serial.begin(115200);
-  SPIFFS.begin(true);
+
+  // MOTOR: Software Enable for Channel B
+  motor.setSpeed(255);
+  motor.stop();
+
+  if (!SPIFFS.begin(true))
+    Serial.println("SPIFFS Fail");
   ensureLogHeader();
-  computeCalibrationFactor();
+  loadCalibrationFromPrefs();
 
-  pinMode(FLOW_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(FLOW_PIN), flowISR, RISING);
-
-  pinMode(MOTOR_IN1, OUTPUT);
-  pinMode(MOTOR_IN2, OUTPUT);
-  pumpStop();
-
-  // WiFi
   WiFi.softAP(AP_SSID, AP_PASS);
-  Serial.print("AP IP: ");
-  Serial.println(WiFi.softAPIP());
-
   WiFi.mode(WIFI_AP_STA);
   WiFi.begin(HOME_SSID, HOME_PASS);
 
-  unsigned long t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 7000)
+  long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 8000)
   {
-    Serial.print(".");
-    delay(300);
+    delay(100);
   }
-  Serial.println();
-
-  if (WiFi.status() == WL_CONNECTED)
-  {
-    Serial.print("STA CONNECTED: ");
-    Serial.println(WiFi.localIP());
-  }
+  Serial.println(WiFi.status() == WL_CONNECTED ? "Wifi Connected" : "Wifi Failed");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP()); // <--- READ THIS FOR .ENV FILE
 
   configTime(19800, 0, "pool.ntp.org");
 
-  // HTTP routes
+  // Routes
   server.on("/", handleRoot);
-  server.on("/status", handleStatus);
-  server.on("/logs", handleLogsCSV);
-  server.on("/clearlogs", handleClearLogs);
-  server.on("/start", handleStart);
-  server.on("/stop", handleStop);
   server.on("/events", handleEvents);
+  server.on("/start", HTTP_POST, handleDispenseStart);
+  server.on("/stop", HTTP_POST, handleDispenseStop);
+  server.on("/calibrate/start", HTTP_POST, handleCalStart);
+  server.on("/calibrate/stop", HTTP_POST, handleCalStop);
+  server.on("/calibrate/save", HTTP_POST, handleCalSave);
+  server.on("/calibrate/reset", HTTP_POST, handleCalReset);
 
-  // ⭐ REQUIRED FIX FOR TOKEN CHECK ⭐
   const char *headerKeys[] = {"X-DISPENSE-TOKEN"};
   server.collectHeaders(headerKeys, 1);
-
   server.begin();
 }
 
@@ -284,68 +446,49 @@ void loop()
 {
   server.handleClient();
 
-  if (dispensing)
+  // 1. Auto Reconnect
+  if (WiFi.status() != WL_CONNECTED)
   {
-    static unsigned long lastCalc = 0;
-    static unsigned long lastPulseSnap = 0;
-
-    if (millis() - lastCalc >= 1000)
+    static unsigned long lastCheck = 0;
+    if (millis() - lastCheck > 10000)
     {
-      // 1 second flow calc
-      detachInterrupt(digitalPinToInterrupt(FLOW_PIN));
-
-      unsigned long pulseDelta = pulseCount - lastPulseSnap;
-      lastPulseSnap = pulseCount;
-      lastCalc = millis();
-
-      attachInterrupt(digitalPinToInterrupt(FLOW_PIN), flowISR, RISING);
-
-      // Compute mL from pulses
-      float flowLmin = pulseDelta / calibrationFactor;
-      float mlThisSecond = (flowLmin / 60.0f) * 1000.0f;
-
-      dispensed_ml += mlThisSecond;
-
-      // No flow fail-safe
-      if (pulseDelta == 0 && (millis() - lastPulseMillis > NO_PULSE_TIMEOUT_MS))
-      {
-        dispensing = false;
-        pumpStop();
-        appendLog("FAIL_NO_FLOW", current_mode, dispensed_ml, 0);
-        sseSend(makeStateJSON());
-        return;
-      }
-
-      // Timeout fail-safe
-      if (millis() - dispenseStartMillis > MAX_DISPENSE_MS)
-      {
-        dispensing = false;
-        pumpStop();
-        float price = (dispensed_ml / 1000.0f) * PRICE_PER_LITER;
-        appendLog("FAIL_TIMEOUT", current_mode, dispensed_ml, price);
-        sseSend(makeStateJSON());
-        return;
-      }
-
-      // Target reached
-      if (dispensed_ml >= target_ml)
-      {
-        dispensing = false;
-        pumpStop();
-        float price = (dispensed_ml / 1000.0f) * PRICE_PER_LITER;
-        appendLog("SUCCESS", current_mode, dispensed_ml, price);
-        sseSend(makeStateJSON());
-        return;
-      }
-
-      sseSend(makeStateJSON());
+      lastCheck = millis();
+      WiFi.reconnect();
     }
   }
 
-  // SSE keepalive
-  if (sseClientActive && millis() - lastSSEPing > 15000)
+  // 2. Calibration Logic
+  if (calibrating && millis() - calStartMillis > CAL_MAX_MS)
   {
-    sseClient.print(": ping\n\n");
-    lastSSEPing = millis();
+    motor.stop();
+    calibrating = false;
+    sseSend(makeStateJSON());
+  }
+
+  // 3. Dispense Logic
+  if (dispensing)
+  {
+    unsigned long now = millis();
+    if (now >= dispenseEndMillis)
+    {
+      motor.stop();
+      dispensing = false;
+      sseSend(makeStateJSON());
+    }
+    else if (now - dispenseStartMillis > MAX_DISPENSE_MS)
+    {
+      motor.stop();
+      dispensing = false;
+      sseSend(makeStateJSON());
+    }
+    else
+    {
+      static unsigned long lastPush = 0;
+      if (now - lastPush > 250)
+      {
+        sseSend(makeStateJSON());
+        lastPush = now;
+      }
+    }
   }
 }

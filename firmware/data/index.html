@@ -2,335 +2,286 @@
 <html lang="en">
 
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Milk Dispenser</title>
-
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Milk Dispenser</title>
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
   <style>
-    :root {
-      --bg: #f3f7f3;
-      --card: #fff;
-      --accent: #2e9e63;
-      --muted: #6f846f;
-    }
-
     body {
-      margin: 0;
-      font-family: Inter, Arial, sans-serif;
-      background: var(--bg);
-      color: #123;
+      font-family: 'Segoe UI', sans-serif;
+      background: #222;
+      color: #eee;
+      text-align: center;
+      padding: 20px;
     }
 
     .container {
-      max-width: 420px;
-      margin: 10px auto;
-      padding: 12px;
+      max-width: 400px;
+      margin: auto;
+      background: #333;
+      padding: 20px;
+      border-radius: 15px;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
     }
 
-    .title {
-      font-size: 20px;
-      font-weight: 600;
-      text-align: center;
-      margin-bottom: 6px;
-      color: #173b2a;
-    }
-
-    .card {
-      background: var(--card);
-      border-radius: 12px;
-      padding: 12px;
-      box-shadow: 0 6px 18px rgba(26, 46, 34, 0.06);
-    }
-
-    .display {
+    input#display {
       width: 100%;
-      padding: 12px;
-      font-size: 26px;
-      border-radius: 10px;
-      border: 1px solid #e6efe6;
+      font-size: 2em;
+      padding: 10px;
+      margin-bottom: 15px;
+      background: #000;
+      color: #0f0;
+      border: none;
       text-align: right;
-      background: #fbfffb;
-      margin-bottom: 10px;
+      border-radius: 5px;
       box-sizing: border-box;
     }
 
-    .modes {
+    .progress-track {
+      background: #444;
+      height: 20px;
+      border-radius: 10px;
+      overflow: hidden;
+      margin-bottom: 15px;
+      border: 1px solid #555;
+    }
+
+    .progress-bar {
+      height: 100%;
+      background: #00ccff;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    .mode-row {
       display: flex;
-      gap: 8px;
-      margin-top: 10px;
+      justify-content: space-between;
+      margin-bottom: 15px;
     }
 
     .mode-btn {
       flex: 1;
       padding: 10px;
-      border-radius: 10px;
-      border: 1px solid #dfeee0;
-      background: #f7fbf7;
-      font-weight: 600;
-      color: var(--muted);
+      background: #444;
+      border: none;
+      color: #aaa;
       cursor: pointer;
+      border-radius: 5px;
+      margin: 0 2px;
+      font-weight: bold;
     }
 
     .mode-btn.active {
-      background: var(--accent);
-      color: #fff;
-      border-color: var(--accent);
-      box-shadow: 0 4px 10px rgba(46, 158, 99, 0.14);
+      background: #00ccff;
+      color: #000;
     }
 
     .keypad {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      gap: 8px;
-      margin-top: 12px;
+      gap: 10px;
+      margin-bottom: 15px;
     }
 
-    .key {
-      padding: 14px;
-      border-radius: 10px;
-      background: #fff;
-      border: 1px solid #e6efe6;
-      font-size: 20px;
-      cursor: pointer;
-      text-align: center;
-    }
-
-    .actions {
-      display: flex;
-      gap: 8px;
-      margin-top: 12px;
-    }
-
-    .btn {
-      flex: 1;
-      padding: 12px;
-      border-radius: 10px;
+    button {
+      padding: 15px;
+      font-size: 1.2em;
       border: none;
-      background: var(--accent);
-      color: #fff;
-      font-weight: 600;
+      border-radius: 8px;
       cursor: pointer;
+      background: #555;
+      color: white;
+      transition: 0.2s;
     }
 
-    .btn.stop {
-      background: #d9534f;
+    button:active {
+      transform: scale(0.98);
     }
 
-    .progress-wrap {
-      margin-top: 12px;
-      background: #eaf3ea;
-      border-radius: 10px;
-      padding: 6px;
+    .btn-green {
+      background: #28a745;
+      grid-column: span 3;
+      font-weight: bold;
     }
 
-    .progress {
-      height: 14px;
-      background: #dcefd9;
-      border-radius: 10px;
-      overflow: hidden;
+    .btn-red {
+      background: #dc3545;
     }
 
-    .progress>.bar {
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, var(--accent), #67c78f);
-      transition: width 260ms linear;
+    .btn-yellow {
+      background: #ffc107;
+      color: #000;
     }
 
-    .status-row {
-      margin-top: 10px;
+    .status-panel {
+      margin-top: 20px;
+      padding: 10px;
+      background: #2a2a2a;
+      border-radius: 8px;
+      font-size: 0.9em;
+      text-align: left;
+    }
+
+    .row {
       display: flex;
       justify-content: space-between;
-      color: var(--muted);
-      font-size: 13px;
+      padding: 5px 0;
+      border-bottom: 1px solid #444;
+    }
+
+    details {
+      margin-top: 20px;
+      text-align: left;
+      background: #222;
+      padding: 10px;
+      border-radius: 5px;
+      border: 1px solid #444;
+    }
+
+    summary {
+      cursor: pointer;
+      color: #aaa;
+      font-weight: bold;
+    }
+
+    .cal-controls {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .cal-controls button {
+      font-size: 0.9em;
+      padding: 10px;
     }
   </style>
-
-  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 </head>
 
 <body>
 
   <div class="container">
-    <div class="title">Milk Dispenser</div>
-
-    <div class="card">
-
-      <input id="display" class="display" readonly placeholder="Enter value">
-
-      <div class="modes">
-        <button id="bml" class="mode-btn active" onclick="setMode('ml')">mL</button>
-        <button id="bl" class="mode-btn" onclick="setMode('litre')">Litre</button>
-        <button id="bc" class="mode-btn" onclick="setMode('cost')">Cost</button>
-      </div>
-
-      <div class="keypad">
-        <div class="key" onclick="press('1')">1</div>
-        <div class="key" onclick="press('2')">2</div>
-        <div class="key" onclick="press('3')">3</div>
-        <div class="key" onclick="press('4')">4</div>
-        <div class="key" onclick="press('5')">5</div>
-        <div class="key" onclick="press('6')">6</div>
-        <div class="key" onclick="press('7')">7</div>
-        <div class="key" onclick="press('8')">8</div>
-        <div class="key" onclick="press('9')">9</div>
-        <div class="key" onclick="clearDisplay()">C</div>
-        <div class="key" onclick="press('0')">0</div>
-        <div class="key" onclick="preparePayment()">Pay & Dispense</div>
-      </div>
-
-      <div class="progress-wrap">
-        <div class="progress">
-          <div id="bar" class="bar"></div>
-        </div>
-        <div class="status-row">
-          <div id="statLeft">Idle</div>
-          <div id="statRight">0 / 0 mL</div>
-        </div>
-      </div>
-
-      <div class="actions">
-        <button class="btn" onclick="openLogs()">View Logs</button>
-        <button class="btn stop" onclick="clearAllLogs()">Clear Logs</button>
-      </div>
-
-      <div style="margin-top:10px;" class="small">AP: MilkPoC (password 12345678)</div>
+    <h2>Smart Dispenser</h2>
+    <input type="text" id="display" placeholder="0" readonly>
+    <div class="progress-track">
+      <div id="bar" class="progress-bar"></div>
     </div>
-  </div>
-
-  <div id="logsModal" style="display:none;">
-    <div class="box">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <h3>Logs</h3>
-        <button class="close" onclick="closeLogs()">Close</button>
-      </div>
-      <div id="logContent"></div>
+    <div class="mode-row">
+      <button id="bml" class="mode-btn active" onclick="setMode('ml')">mL</button>
+      <button id="bl" class="mode-btn" onclick="setMode('litre')">Litre</button>
+      <button id="bc" class="mode-btn" onclick="setMode('cost')">₹ Cost</button>
     </div>
+    <div class="keypad">
+      <button onclick="press(1)">1</button><button onclick="press(2)">2</button><button onclick="press(3)">3</button>
+      <button onclick="press(4)">4</button><button onclick="press(5)">5</button><button onclick="press(6)">6</button>
+      <button onclick="press(7)">7</button><button onclick="press(8)">8</button><button onclick="press(9)">9</button>
+      <button onclick="clearDisplay()" class="btn-yellow">CLR</button>
+      <button onclick="press(0)">0</button>
+      <button onclick="stopDispense()" class="btn-red">STOP</button>
+      <button onclick="initiatePayment()" class="btn-green">PAY & POUR</button>
+    </div>
+    <div class="status-panel">
+      <div class="row"><span>State:</span> <span id="statLeft">Idle</span></div>
+      <div class="row"><span>Progress:</span> <span id="statRight">0 / 0 mL</span></div>
+      <div class="row"><span>Cal Factor:</span> <span id="lastCal">Loading...</span></div>
+    </div>
+    <details>
+      <summary>⚙️ Calibration Settings</summary>
+      <div class="cal-controls">
+        <button id="calStartBtn" onclick="startCal()" class="btn-yellow">Start Pump</button>
+        <button id="calStopBtn" onclick="stopCal()" disabled class="btn-red">Stop (100mL)</button>
+        <button onclick="saveCalibration()">Save Value</button>
+        <button onclick="resetCalibration()">Reset All</button>
+      </div>
+    </details>
   </div>
 
   <script>
+    // ================= CONFIGURATION =================
+    // CHANGE THIS TO YOUR PC'S IP ADDRESS (Run ipconfig in CMD)
+    const BACKEND_URL = "http://192.168.1.2:3000";
 
-    const BACKEND_BASE = "http://192.168.1.14:3000";
-    const RAZORPAY_KEY_ID = "rzp_test_Rim994s54pwgE9";
     const PRICE_PER_LITER = 50.0;
-
-    let mode = 'ml';
+    const DISPENSE_TOKEN = "DMTKN_4nFh92xQ7sY8wLf0BqZp3cR1vKdTg";
+    let mode = "ml";
 
     function setMode(m) {
       mode = m;
-      document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-      document.getElementById("b" + (m === "ml" ? "ml" : m === "litre" ? "l" : "c")).classList.add("active");
+      document.querySelectorAll(".mode-btn").forEach(b => b.classList.remove("active"));
+      if (m === "ml") document.getElementById("bml").classList.add("active");
+      if (m === "litre") document.getElementById("bl").classList.add("active");
+      if (m === "cost") document.getElementById("bc").classList.add("active");
     }
 
-    function press(v) {
-      const d = document.getElementById('display');
-      d.value = (d.value || '') + v;
-    }
+    function press(v) { document.getElementById("display").value += v; }
+    function clearDisplay() { document.getElementById("display").value = ""; }
 
-    function clearDisplay() {
-      document.getElementById('display').value = '';
-    }
+    async function initiatePayment() {
+      let val = parseFloat(document.getElementById("display").value);
+      if (!val || val <= 0) return alert("Enter valid amount");
 
-    function computeAmountToCharge(v, m) {
-      if (m === 'ml') return +((v / 1000) * PRICE_PER_LITER).toFixed(2);
-      if (m === 'litre') return +(v * PRICE_PER_LITER).toFixed(2);
-      return +v.toFixed(2);
-    }
+      let amountInRupees = 0;
+      if (mode === "ml") amountInRupees = (val / 1000) * PRICE_PER_LITER;
+      else if (mode === "litre") amountInRupees = val * PRICE_PER_LITER;
+      else if (mode === "cost") amountInRupees = val;
+      if (amountInRupees < 1) amountInRupees = 1;
 
-    async function preparePayment() {
-      const raw = document.getElementById('display').value;
-      if (!raw) return alert("Enter a value");
-
-      const value = parseFloat(raw);
-      if (isNaN(value) || value <= 0) return alert("Invalid value");
-
-      const amountINR = computeAmountToCharge(value, mode);
-
+      document.getElementById("statLeft").innerText = "Creating Order...";
       try {
-        let res = await fetch(`${BACKEND_BASE}/create_order`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ amount: amountINR, currency: "INR", client_value: value, client_mode: mode })
+        const res = await fetch(`${BACKEND_URL}/create_order`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ amount: amountInRupees, client_value: val, client_mode: mode })
         });
+        const orderData = await res.json();
+        if (!res.ok) throw orderData.error || "Server Error";
 
-        let order = await res.json();
-        if (!order.id) throw new Error("Order creation failed");
-
-        const options = {
-          key: RAZORPAY_KEY_ID,
-          amount: order.amount,
-          currency: order.currency,
-          order_id: order.id,
-          name: "Milk Dispenser",
-
-          handler: function (resp) {
-            fetch(`${BACKEND_BASE}/verify_payment`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(resp)
-            }).then(r => r.json()).then(j => {
-              if (j.success) {
-                document.getElementById('statLeft').innerText = "Dispensing...";
-                clearDisplay();
-              } else alert("Verification failed");
-            });
-          },
-
-          theme: { color: "#2e9e63" }
-        };
-
-        new Razorpay(options).open();
-
-      } catch (e) { alert("Payment failed: " + e); }
+        const rzp1 = new Razorpay({
+          "key": orderData.key_id, "amount": orderData.amount, "currency": orderData.currency,
+          "name": "Milk Dispenser", "description": `Dispensing ${val} ${mode}`, "order_id": orderData.id,
+          "handler": function (response) { verifyPayment(response); }, "theme": { "color": "#00ccff" }
+        });
+        rzp1.open();
+        document.getElementById("statLeft").innerText = "Waiting for Pay...";
+      } catch (e) { alert("Order Failed: " + e); document.getElementById("statLeft").innerText = "Error"; }
     }
 
-    function updateStatus(d) {
-      if (!d) return;
-      const ml = d.dispensed_ml || 0;
-      const pct = Math.min((ml / Math.max(d.target_ml, 1)) * 100, 100);
-
-      document.getElementById('bar').style.width = pct + '%';
-      document.getElementById('statLeft').innerText = d.dispensing ? "Dispensing..." : "Idle";
-      document.getElementById('statRight').innerText = `${Math.round(ml)} / ${Math.round(d.target_ml)} mL`;
+    async function verifyPayment(response) {
+      document.getElementById("statLeft").innerText = "Verifying...";
+      try {
+        const res = await fetch(`${BACKEND_URL}/verify_payment`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ razorpay_payment_id: response.razorpay_payment_id, razorpay_order_id: response.razorpay_order_id, razorpay_signature: response.razorpay_signature })
+        });
+        const result = await res.json();
+        if (result.success) { alert("Payment Success! Pump Starting..."); clearDisplay(); }
+        else { alert("Payment Verification Failed: " + result.error); }
+      } catch (e) { alert("Network Error: " + e); }
     }
+
+    async function stopDispense() { await fetch("/stop", { method: "POST", headers: { "X-DISPENSE-TOKEN": DISPENSE_TOKEN } }); }
+    async function startCal() { document.getElementById("calStartBtn").disabled = true; document.getElementById("calStopBtn").disabled = false; await fetch("/calibrate/start", { method: "POST", headers: { "X-DISPENSE-TOKEN": DISPENSE_TOKEN } }); }
+    async function stopCal() { document.getElementById("calStopBtn").disabled = true; let r = await fetch("/calibrate/stop", { method: "POST", headers: { "X-DISPENSE-TOKEN": DISPENSE_TOKEN } }); let j = await r.json(); alert(`Sample: ${j.last_sample_ms}ms | Avg: ${j.average_ms}ms`); document.getElementById("calStartBtn").disabled = false; }
+    async function saveCalibration() { await fetch("/calibrate/save", { method: "POST", headers: { "X-DISPENSE-TOKEN": DISPENSE_TOKEN } }); alert("Saved!"); }
+    async function resetCalibration() { if (confirm("Reset?")) await fetch("/calibrate/reset", { method: "POST", headers: { "X-DISPENSE-TOKEN": DISPENSE_TOKEN } }); }
 
     function setupSSE() {
-      try {
-        const evt = new EventSource('/events');
-        evt.onmessage = e => updateStatus(JSON.parse(e.data));
-        evt.onerror = () => { evt.close(); setTimeout(setupSSE, 2000); };
-      } catch {
-        setInterval(() => {
-          fetch('/status').then(r => r.json()).then(updateStatus);
-        }, 1000);
-      }
+      const evt = new EventSource("/events");
+      evt.onmessage = e => {
+        try {
+          const d = JSON.parse(e.data);
+          if (d.saved_ms_per_100ml) document.getElementById("lastCal").innerText = d.saved_ms_per_100ml.toFixed(0) + " ms/100mL";
+          const pct = Math.min((d.dispensed_ml / Math.max(d.target_ml, 1)) * 100, 100);
+          document.getElementById("bar").style.width = pct + "%";
+          if (d.calibrating) document.getElementById("statLeft").innerText = "Calibrating...";
+          else if (d.dispensing) document.getElementById("statLeft").innerText = "Dispensing...";
+          else if (document.getElementById("statLeft").innerText !== "Verifying..." && document.getElementById("statLeft").innerText !== "Waiting for Pay...") document.getElementById("statLeft").innerText = "Idle";
+          document.getElementById("statRight").innerText = Math.round(d.dispensed_ml || 0) + " / " + Math.round(d.target_ml || 0) + " mL";
+        } catch { }
+      };
+      evt.onerror = () => { evt.close(); setTimeout(setupSSE, 2000); };
     }
-
-    function openLogs() {
-      fetch('/logs').then(r => r.text()).then(txt => {
-        const box = document.getElementById('logContent');
-        box.innerHTML = "";
-        txt.split("\n").forEach(line => {
-          if (!line.trim()) return;
-          const div = document.createElement('div');
-          div.textContent = line;
-          box.appendChild(div);
-        });
-        document.getElementById('logsModal').style.display = "flex";
-      });
-    }
-
-    function closeLogs() {
-      document.getElementById('logsModal').style.display = "none";
-    }
-
-    function clearAllLogs() {
-      fetch('/clearlogs').then(() => alert("Logs cleared"));
-    }
-
     setupSSE();
-    setMode('ml');
-
+    setMode("ml");
   </script>
 </body>
 
